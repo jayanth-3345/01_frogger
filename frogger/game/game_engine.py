@@ -1,12 +1,4 @@
-"""
-GameEngine: owns the frog and all vehicles, and runs one frame's worth
-of game logic.
-
-Starter version: the frog can move, hop across the road, and reach the
-goal - but there's no lives system, no score, and no timer. Collision
-detection also has a known bug (see game/collisions.py) that Task 1
-asks you to fix.
-"""
+"""Own the frog and vehicles, and run one frame of game logic."""
 
 import random
 
@@ -20,10 +12,35 @@ from game.renderer import (
 )
 
 LANE_SPEEDS = [1.5, -2, 2, -2.5, 1.5, -2]   # one entry per road row, alternating direction
+STARTING_LIVES = 3
+HIT_DURATION_MS = 900
+ATTEMPT_DURATION_MS = 30_000
 
 
 class GameEngine:
     def __init__(self):
+        self.lives = STARTING_LIVES
+        self.score = 0
+        self.won = False
+        self.hit_until_ms = 0
+        self.attempt_deadline_ms = pygame.time.get_ticks() + ATTEMPT_DURATION_MS
+        self._build_entities()
+
+    @property
+    def game_over(self):
+        return self.lives <= 0
+
+    @property
+    def time_remaining_seconds(self):
+        remaining_ms = max(0, self.attempt_deadline_ms - pygame.time.get_ticks())
+        return (remaining_ms + 999) // 1000
+
+    def restart(self):
+        self.lives = STARTING_LIVES
+        self.score = 0
+        self.won = False
+        self.hit_until_ms = 0
+        self.attempt_deadline_ms = pygame.time.get_ticks() + ATTEMPT_DURATION_MS
         self._build_entities()
 
     def _build_entities(self):
@@ -63,6 +80,12 @@ class GameEngine:
                                               height=CELL_SIZE - 8, speed=speed))
 
     def handle_keydown(self, key):
+        if key == pygame.K_r:
+            self.restart()
+            return
+        if self.game_over or self.won or pygame.time.get_ticks() < self.hit_until_ms:
+            return
+
         if key == pygame.K_UP:
             self.frog.move(0, -1)
         elif key == pygame.K_DOWN:
@@ -71,20 +94,42 @@ class GameEngine:
             self.frog.move(-1, 0)
         elif key == pygame.K_RIGHT:
             self.frog.move(1, 0)
-        elif key == pygame.K_r:
-            self._build_entities()
 
     def update(self):
+        if self.game_over or self.won:
+            return
+
+        now_ms = pygame.time.get_ticks()
+        if now_ms >= self.attempt_deadline_ms:
+            self.lives -= 1
+            self.frog.reset()
+            self.attempt_deadline_ms = now_ms + ATTEMPT_DURATION_MS
+            return
+
         for v in self.vehicles:
             v.update(road_width_px=WIDTH)
 
-        if check_collision(self.frog, self.vehicles):
+        if now_ms >= self.hit_until_ms and check_collision(self.frog, self.vehicles):
+            self.lives -= 1
             self.frog.reset()
+            self.hit_until_ms = now_ms + HIT_DURATION_MS
+            self.attempt_deadline_ms = now_ms + ATTEMPT_DURATION_MS
 
         if self.frog.row == GOAL_ROW:
-            self.frog.reset()
+            self.score += 1
+            self.won = True
 
     def draw(self, surface, font):
         from game import renderer
-        renderer.draw_scene(surface, self.frog, self.vehicles)
+        hit_visible = not self.game_over and pygame.time.get_ticks() < self.hit_until_ms
+        renderer.draw_scene(surface, self.frog, self.vehicles, frog_hit=hit_visible)
+        renderer.draw_text(surface, font, f"Lives: {self.lives}", (10, 10))
+        renderer.draw_text(surface, font, f"Score: {self.score}", (10, 34))
+        renderer.draw_text(surface, font, f"Time: {self.time_remaining_seconds}s", (10, 58))
         renderer.draw_text(surface, font, "Arrow keys to move. R to restart.", (10, HEIGHT - 24))
+        if hit_visible:
+            renderer.draw_banner(surface, font, "HIT!")
+        if self.game_over:
+            renderer.draw_game_over(surface, font)
+        elif self.won:
+            renderer.draw_victory(surface, font, self.score)
